@@ -141,3 +141,65 @@ resource "aws_route_table_association" "private" {
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[count.index].id
 }
+
+# Security Group for ALB
+resource "aws_security_group" "alb" {
+  name        = "alb-sg"
+  description = "Allow HTTP and HTTPS access (IPv4 & IPv6)"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description      = "Allow HTTP (IPv4 & IPv6)"
+    from_port        = 80
+    to_port          = 80
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  ingress {
+    description      = "Allow HTTPS (IPv4 & IPv6)"
+    from_port        = 443
+    to_port          = 443
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  egress {
+    description      = "Allow all outbound traffic"
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  tags = {
+    Name = "alb-sg"
+  }
+}
+
+# Security Group for ECS EC2
+resource "aws_security_group" "ecs" {
+  vpc_id      = aws_vpc.main.id
+  description = "Allow ECS EC2 instances access to ALB and other services"
+  ingress {
+    from_port       = 3000 # Adjusted to match the container port
+    to_port         = 3001 # Adjusted to match the container port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+    description     = "Allow ALB to reach ECS containers"
+  }
+  egress {
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  tags = {
+    Name = "ecs-sg"
+  }
+}
