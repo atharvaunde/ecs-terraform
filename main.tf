@@ -1,0 +1,143 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
+
+data "aws_availability_zones" "available" {}
+
+# VPC and Subnet Configuration for dual-stack (IPv4 and IPv6)
+resource "aws_vpc" "main" {
+  cidr_block                       = "10.0.0.0/16"
+  assign_generated_ipv6_cidr_block = true
+  enable_dns_support               = true
+  enable_dns_hostnames             = true
+  tags = {
+    Name = "main-vpc"
+  }
+
+}
+
+# IPv6 CIDR block association for subnets
+resource "aws_subnet" "public" {
+  count                   = var.subnet_count
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = false
+  ipv6_cidr_block         = cidrsubnet(aws_vpc.main.ipv6_cidr_block, 8, count.index)
+  tags = {
+    Name = "public-subnet-${count.index + 1}"
+  }
+}
+
+resource "aws_subnet" "private" {
+  count                   = var.subnet_count
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index + 2)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = false
+  ipv6_cidr_block         = cidrsubnet(aws_vpc.main.ipv6_cidr_block, 8, count.index + 2)
+  tags = {
+    Name = "private-subnet-${count.index + 1}"
+  }
+}
+
+# Internet Gateway for public subnets
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "main-internet-gateway"
+  }
+}
+
+# Egress-Only Internet Gateway for IPv6
+resource "aws_egress_only_internet_gateway" "ipv6" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "main-egress-only-gateway"
+  }
+}
+
+# Elastic IP for NAT Gateway
+resource "aws_eip" "nat" {
+  tags = {
+    Name = "nat-eip"
+  }
+}
+
+# NAT Gateway in first public subnet
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+  tags = {
+    Name = "main-nat-gateway"
+  }
+}
+
+# Route tables
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "public-route-table"
+  }
+}
+
+resource "aws_route_table" "private" {
+  count  = var.subnet_count
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "private-route-table-${count.index + 1}"
+  }
+}
+
+# Public route table routes
+resource "aws_route" "public_ipv4" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.gw.id
+
+}
+
+resource "aws_route" "public_ipv6" {
+  route_table_id              = aws_route_table.public.id
+  destination_ipv6_cidr_block = "::/0"
+  gateway_id                  = aws_internet_gateway.gw.id
+}
+
+# Private route table routes
+resource "aws_route" "private_ipv4" {
+  count                  = 2
+  route_table_id         = aws_route_table.private[count.index].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat.id
+
+}
+
+resource "aws_route" "private_ipv6" {
+  count                       = 2
+  route_table_id              = aws_route_table.private[count.index].id
+  destination_ipv6_cidr_block = "::/0"
+  egress_only_gateway_id      = aws_egress_only_internet_gateway.ipv6.id
+}
+
+# Route table associations
+resource "aws_route_table_association" "public" {
+  count          = 2
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+
+}
+
+resource "aws_route_table_association" "private" {
+  count          = 2
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[count.index].id
+}
