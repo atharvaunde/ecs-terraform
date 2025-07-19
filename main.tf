@@ -12,6 +12,7 @@ provider "aws" {
 }
 
 data "aws_availability_zones" "available" {}
+
 data "aws_iam_policy_document" "ecs_instance_assume_role_policy" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -22,9 +23,18 @@ data "aws_iam_policy_document" "ecs_instance_assume_role_policy" {
   }
 }
 
+data "aws_ami" "ecs" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-ecs-hvm-*-x86_64-ebs"] # Amazon ECS-optimized AMI for Amazon Linux 2 with x86_64 architecture
+  }
+}
+
 # VPC and Subnet Configuration for dual-stack (IPv4 and IPv6)
 resource "aws_vpc" "main" {
-  cidr_block                       = "10.0.0.0/16"
+  cidr_block                       = var.ipv4_cidr_block
   assign_generated_ipv6_cidr_block = true
   enable_dns_support               = true
   enable_dns_hostnames             = true
@@ -233,4 +243,47 @@ resource "aws_iam_instance_profile" "ecs_instance_profile" {
 # ECS Cluster
 resource "aws_ecs_cluster" "main" {
   name = "ecs-spot-cluster"
+}
+
+resource "aws_launch_template" "ecs" {
+  name_prefix   = "ecs-spot-"
+  image_id      = data.aws_ami.ecs.id
+  instance_type = "t3.small"
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ecs_instance_profile.name
+  }
+  user_data = base64encode("#!/bin/bash\necho ECS_CLUSTER=${aws_ecs_cluster.main.name} >> /etc/ecs/ecs.config")
+  instance_market_options {
+    market_type = "spot" # Use spot instances
+  }
+  network_interfaces {
+    associate_public_ip_address = false
+    security_groups             = [aws_security_group.ecs.id]
+    subnet_id                   = null # Set by ASG
+  }
+}
+
+
+resource "aws_autoscaling_group" "ecs" {
+  desired_capacity    = 1
+  max_size            = 2
+  min_size            = 0
+  vpc_zone_identifier = aws_subnet.private[*].id
+  launch_template {
+    id      = aws_launch_template.ecs.id
+    version = "$Latest"
+  }
+
+  depends_on = [aws_launch_template.ecs]
+}
+
+# ALB (dualstack)
+resource "aws_lb" "ecs" {
+  name                       = "ecs-alb"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = aws_subnet.public[*].id
+  ip_address_type            = "dualstack"
+  enable_deletion_protection = false # Disable deletion protection for easier management via Terraform
 }
