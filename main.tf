@@ -12,6 +12,15 @@ provider "aws" {
 }
 
 data "aws_availability_zones" "available" {}
+data "aws_iam_policy_document" "ecs_instance_assume_role_policy" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
 
 # VPC and Subnet Configuration for dual-stack (IPv4 and IPv6)
 resource "aws_vpc" "main" {
@@ -202,4 +211,26 @@ resource "aws_security_group" "ecs" {
   tags = {
     Name = "ecs-sg"
   }
+}
+
+
+# IAM Role and Instance Profile (assume imported)
+resource "aws_iam_role" "ecs_instance_role" {
+  name               = "ecsInstanceRole"
+  assume_role_policy = data.aws_iam_policy_document.ecs_instance_assume_role_policy.json
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_instance_role_policy" {
+  role       = aws_iam_role.ecs_instance_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+}
+
+resource "aws_iam_instance_profile" "ecs_instance_profile" {
+  name = "ecsInstanceProfile"
+  role = aws_iam_role.ecs_instance_role.name
+}
+
+# ECS Cluster
+resource "aws_ecs_cluster" "main" {
+  name = "ecs-spot-cluster"
 }
